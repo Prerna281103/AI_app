@@ -2,10 +2,11 @@ import streamlit as st
 import pdfplumber
 import docx
 import easyocr
-from PIL import Image
 import fitz  # PyMuPDF
 import os
 import base64
+import re
+from pdfminer.high_level import extract_text
 
 # Cache EasyOCR reader to improve performance
 @st.cache_resource
@@ -18,18 +19,40 @@ def extract_text_image(file_path):
     result = reader.readtext(file_path, detail=0)
     return ' '.join(result)
 
-# Extract text from PDF using pdfplumber
+# Extract text using pdfminer
+def extract_text_pdfminer(file_path):
+    try:
+        return extract_text(file_path).strip()
+    except Exception as e:
+        return ""
+
+# Extract text using PyMuPDF (fallback)
+def extract_text_pymupdf(file_path):
+    try:
+        doc = fitz.open(file_path)
+        return "\n".join([page.get_text("text") for page in doc])
+    except Exception as e:
+        return ""
+
+# Extract text from PDF with multiple approaches
 def extract_text_from_pdf(uploaded_file):
-    with pdfplumber.open(uploaded_file) as pdf:
-        pdf_text = ""
-        for page in pdf.pages:
-            pdf_text += page.extract_text() or ""
-    return pdf_text
+    text = extract_text_pdfminer(uploaded_file)
+    if not text.strip():  # If pdfminer fails
+        text = extract_text_pymupdf(uploaded_file)
+    if not text.strip():  # If both fail, use OCR
+        text = extract_text_image(uploaded_file)
+    return post_process_text(text)
 
 # Extract text from DOCX
 def extract_text_from_docx(uploaded_file):
     doc = docx.Document(uploaded_file)
     return "\n".join([para.text for para in doc.paragraphs])
+
+# Post-process extracted text (fix spacing issues)
+def post_process_text(text):
+    text = re.sub(r"(\w)([A-Z])", r"\1 \2", text)  # Add space before capital letters
+    text = re.sub(r"\s+", " ", text)  # Normalize spaces
+    return text.strip()
 
 # Encode PDF to base64 for embedding
 def encode_pdf(file_path):
@@ -72,7 +95,7 @@ def document_upload_page():
         if uploaded_file.name.endswith(".pdf"):
             extracted_text = extract_text_from_pdf(file_path)
         elif uploaded_file.name.endswith(".docx"):
-            extracted_text = extract_text_from_docx(uploaded_file)
+            extracted_text = extract_text_from_docx(file_path)
         elif uploaded_file.name.lower().endswith((".png", ".jpg", ".jpeg")):
             extracted_text = extract_text_image(file_path)
         else:
